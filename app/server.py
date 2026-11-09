@@ -13,7 +13,8 @@ handover_events 를 읽기만 하고, 제안은 proc_def_version(draft) + PR 로
   GET  /processes        업무 묶음 목록 — 서로 다른 업무를 갈라 묶음마다 도출한다
   GET  /discovered       도출된 프로세스(정의 JSON 포함) — BPMN 모델러가 그대로 렌더. process_key 로 묶음 지정
   POST /mine             도출 결과(dry_run=true 만). 제안은 식별 화면이 버전 저장 → 병합 요청으로 만든다
-  GET  /patterns         Process GPT Lite — 반복 패턴(활동 집합이 비슷한 케이스 묶음)
+  POST /patterns         Process GPT Lite — 반복 업무 묶음(업무 범주로 묶는다) · 확인 필요 사례
+  GET  /patterns         Process GPT Lite — 범주 없이 부르는 경로. 묶지 않고 모두 확인 필요로 돌려준다
   POST /discover         Process GPT Lite — case_ids 로 고른 케이스만 도출(쓰기 없음)
 """
 from __future__ import annotations
@@ -306,15 +307,40 @@ def mine(req: MineRequest, tenant: str = Depends(tenant_scope)):
 # ---------- Process GPT Lite (app.lite) ----------
 
 
+class DecidedProcess(BaseModel):
+    """관리자가 정식 등록·보류한 프로세스. 묶음 하나로 고정한다."""
+
+    key: str
+    category: Optional[str] = None
+    core_activities: list[str] = []
+
+
+class PatternsRequest(BaseModel):
+    tenant_id: Optional[str] = None
+    # 사례 → 업무 범주. 범주가 없는 사례는 묶지 않고 확인 필요로 돌려준다
+    categories: dict[str, str] = {}
+    # 결정된 프로세스. 결정 순서대로 준다(범주가 같은 결정이 여럿이면 먼저 결정된 쪽이 앞)
+    decided: list[DecidedProcess] = []
+    min_cases: int = lite_patterns.MIN_CASES
+
+
+def _patterns(tenant: str, min_cases: int, categories: dict, decided: list) -> dict:
+    found = lite_patterns.find(
+        lite_miner.fetch_events(tenant), min_cases=min_cases, categories=categories, decided=decided
+    )
+    return {"count": len(found["patterns"]), "patterns": found["patterns"], "unclassified": found["unclassified"]}
+
+
+@app.post("/patterns")
+def patterns_post(req: PatternsRequest, tenant: str = Depends(tenant_scope)):
+    """반복되는 업무 묶음. 업무 범주가 묶음을 정하고, 결정된 프로세스의 경계는 지킨다(쓰기 없음)."""
+    return _patterns(tenant, req.min_cases, dict(req.categories), [d.model_dump() for d in req.decided])
+
+
 @app.get("/patterns")
-def patterns(
-    tenant: str = Depends(tenant_scope),
-    min_cases: int = lite_patterns.MIN_CASES,
-    similarity: float = lite_patterns.SIMILARITY,
-):
-    """반복되는 업무 묶음. 이미 정의된 프로세스에서 나온 기록은 뺀다(Lite 가 추천할 후보)."""
-    found = lite_patterns.find(lite_miner.fetch_events(tenant), min_cases=min_cases, similarity=similarity)
-    return {"count": len(found), "patterns": found}
+def patterns(tenant: str = Depends(tenant_scope), min_cases: int = lite_patterns.MIN_CASES):
+    """범주 없이 부르는 경로. 묶을 근거가 없으므로 모든 사례를 확인 필요로 돌려준다."""
+    return _patterns(tenant, min_cases, {}, [])
 
 
 class DiscoverRequest(BaseModel):

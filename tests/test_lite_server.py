@@ -70,14 +70,35 @@ def test_patterns_need_tenant_even_in_dev_mode(monkeypatch, fetched):
     assert fetched == []
 
 
+CATEGORIES = {"c1": "견적 대응", "c2": "견적 대응", "c3": "견적 대응"}
+
+
 def test_patterns_read_only_the_requested_tenant(monkeypatch, fetched):
     monkeypatch.setenv("MINER_AUTH", "off")
-    res = TestClient(server.app).get("/patterns?tenant_id=acme&min_cases=3")
+    res = TestClient(server.app).post("/patterns", json={"tenant_id": "acme", "min_cases": 3, "categories": CATEGORIES})
     assert res.status_code == 200, res.text
     body = res.json()
     assert fetched == ["acme"]
     assert body["count"] == 1
     assert body["patterns"][0]["main_variant"] == ["견적 요청 접수", "견적 작성", "회신"]
+    assert body["patterns"][0]["category"] == "견적 대응"
+    assert body["unclassified"] == []
+
+
+def test_patterns_without_categories_asks_instead_of_grouping(monkeypatch, fetched):
+    monkeypatch.setenv("MINER_AUTH", "off")
+    res = TestClient(server.app).get("/patterns?tenant_id=acme&min_cases=3")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["count"] == 0
+    assert {u["case_id"] for u in body["unclassified"]} == {"c1", "c2", "c3"}
+
+
+def test_patterns_post_without_token_is_rejected(monkeypatch, fetched):
+    monkeypatch.delenv("MINER_AUTH", raising=False)
+    res = TestClient(server.app).post("/patterns", json={"tenant_id": "acme"})
+    assert res.status_code == 401
+    assert fetched == []
     assert "비밀 업무" not in res.text
 
 

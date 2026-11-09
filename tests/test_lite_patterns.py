@@ -22,13 +22,21 @@ DESIGN = ["요청 메일 접수", "평면도 작성", "제안서 작성", "견�
 QUOTE = ["견적 산출", "견적서 검토 및 승인", "계약서 초안 작성", "고객 발송"]
 
 
+def _cats(prefix, n, name):
+    return {f"{prefix}{i}": name for i in range(n)}
+
+
+def _find(rows, categories, **kw):
+    return patterns.find(rows, categories=categories, **kw)["patterns"]
+
+
 def test_two_kinds_of_work_become_two_patterns():
     rows = []
     for i in range(4):
         rows += _rows(f"d{i}", DESIGN, tool="캐드크래프트", t0=i)
     for i in range(3):
         rows += _rows(f"q{i}", QUOTE, t0=i)
-    found = patterns.find(rows)
+    found = _find(rows, {**_cats("d", 4, "매장 설계"), **_cats("q", 3, "견적 대응")})
     assert len(found) == 2
     big = found[0]
     assert big["case_count"] == 4 and big["main_variant"] == DESIGN
@@ -38,19 +46,20 @@ def test_two_kinds_of_work_become_two_patterns():
 
 def test_key_is_stable_when_more_cases_arrive():
     rows = [r for i in range(3) for r in _rows(f"d{i}", DESIGN, t0=i)]
-    k1 = patterns.find(rows)[0]["key"]
+    cats = _cats("d", 3, "매장 설계")
+    k1 = _find(rows, cats)[0]["key"]
     rows += _rows("d9", DESIGN, t0=5)
-    assert patterns.find(rows)[0]["key"] == k1
+    assert _find(rows, {**cats, "d9": "매장 설계"})[0]["key"] == k1
 
 
 def test_cases_from_a_defined_process_are_not_suggested_again():
     rows = [r for i in range(3) for r in _rows(f"d{i}", DESIGN, t0=i, proc="mined_x")]
-    assert patterns.find(rows) == []
+    assert _find(rows, _cats("d", 3, "매장 설계")) == []
 
 
 def test_too_few_cases_is_not_a_pattern():
     rows = [r for i in range(2) for r in _rows(f"d{i}", DESIGN, t0=i)]
-    assert patterns.find(rows) == []
+    assert _find(rows, _cats("d", 2, "매장 설계")) == []
 
 
 def test_role_and_tools_reach_the_profile():
