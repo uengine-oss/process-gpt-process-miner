@@ -308,11 +308,16 @@ def mine(req: MineRequest, tenant: str = Depends(tenant_scope)):
 
 
 class DecidedProcess(BaseModel):
-    """관리자가 정식 등록·보류한 프로세스. 묶음 하나로 고정한다."""
+    """지켜야 할 프로세스 경계(정식 등록·보류한 프로세스, 이미 보인 추천). 묶음 하나로 고정한다."""
 
     key: str
     category: Optional[str] = None
+    # 관리자가 확정한 필수 단계 — 빈도로 다시 정하지 않는다
     core_activities: list[str] = []
+    # 관리자가 확인한 사례. 주면 새로 붙은 사례를 new_case_ids · proposed 로 나눠 준다
+    case_ids: Optional[list[str]] = None
+    # 관리자가 이 프로세스가 아니라고 한 사례
+    exclude: list[str] = []
 
 
 class PatternsRequest(BaseModel):

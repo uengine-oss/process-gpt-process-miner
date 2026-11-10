@@ -114,3 +114,36 @@ def test_agent_delegation_without_label_is_excluded():
     assert pick_label({"source": "chat_handover", "next_activity_label": "견적서 검토"}) == "견적서 검토"
     # 너무 긴 라벨은 활동명이 아니다
     assert pick_label({"source": "chat_handover", "next_activity_label": "가" * 80}) == ""
+
+
+def test_repeated_start_keeps_order_as_loop():
+    """한 흐름 안에 시작 단계가 다시 나오면(접수 → 작성 → 접수) 컷이 없다.
+    이때 모든 단계를 배타 분기로 묶으면 '접수가 늘 먼저' 라는 순서를 잃는다(2026-11-10 '요청 메일·견적서 작성').
+    IM 의 fall-through(strict tau loop)대로 반복 단위로 끊어 본체를 찾는다."""
+    traces = ([["접수", "제안서 작성", "접수"]] * 9 + [["접수", "견적서 작성"]] * 8 + [["접수", "제안서 작성"]] * 4
+              + [["접수", "견적서 작성", "접수"]] * 4 + [["접수", "견적서 작성", "견적서 검토"]])
+    tree = discover_from_traces(traces)
+    assert tree.kind == SEQ, tree
+    loop = tree.children[0]
+    assert loop.kind == LOOP, f"반복으로 보지 않음: {tree}"
+    body = loop.children[0]
+    assert body.kind == SEQ and body.children[0].activities() == ["접수"], f"접수가 맨 앞이 아님: {tree}"
+    assert set(body.children[1].activities()) == {"견적서 작성", "제안서 작성"}
+    assert tree.children[1].kind == XOR and "τ" in repr(tree.children[1]), "견적서 검토는 건너뛸 수 있다"
+
+
+def test_tau_loop_when_no_end_start_pair():
+    """끝 단계 뒤에 시작 단계가 바로 오지 않아도, 시작 단계가 다시 나오는 곳에서 끊는다(tau loop)."""
+    traces = [["A", "B", "A", "C"], ["A", "C"], ["A", "B", "A", "B", "A", "C"]]
+    tree = discover_from_traces(traces)
+    assert LOOP in repr(tree), tree
+    acts = tree.activities()
+    assert len(acts) == len(set(acts)), f"활동 중복: {acts}"
+
+
+def test_branch_step_is_not_optional_within_its_branch():
+    """배타 분기 갈래 안의 단계는 그 갈래로 간 사례로 센다. 견적서 갈래로 간 사례는 모두 견적서를 썼으니
+    견적서 작성은 그 갈래에서 필수다(전체로 세면 건너뛸 수 있게 돼, 아무 일도 안 하는 경로가 생긴다)."""
+    traces = [["접수", "제안서 작성"]] * 13 + [["접수", "견적서 작성"]] * 12 + [["접수", "견적서 작성", "견적서 검토"]]
+    tree = discover_from_traces(traces)
+    assert repr(tree) == "seq('접수', xor(seq('견적서 작성', xor('견적서 검토', τ)), '제안서 작성'))", tree

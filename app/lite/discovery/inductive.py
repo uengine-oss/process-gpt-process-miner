@@ -243,15 +243,65 @@ def discover(
             continue
         children = []
         for p in parts:
-            sub = discover(dfg.project(p), p, traces, _depth + 1)
+            # 배타 분기의 갈래는 그 갈래로 간 사례만으로 본다(IM 의 로그 분할). 전체로 세면 갈래 안의
+            # 단계가 '일부 사례에만 있다' 며 건너뛸 수 있게 돼, 아무 일도 안 하는 경로가 생긴다.
+            sub_traces = [t for t in traces if p & set(t)] if kind == XOR and traces else traces
+            sub = discover(dfg.project(p), p, sub_traces, _depth + 1)
             # 배타 분기는 갈래 자체가 선택이므로 다시 선택적으로 만들지 않는다
             if kind in (SEQ, AND):
                 sub = _make_optional(sub, p, traces)
             children.append(sub)
         return flatten(Node(kind, children=children))
 
-    # 컷 없음 → 구조는 건전하게 두되 순서는 주장하지 않는다
+    # 컷 없음 → IM 의 fall-through: 흐름을 반복 단위로 끊어 본체를 다시 찾는다
+    looped = _tau_loop(acts, traces, _depth)
+    if looped is not None:
+        return looped
+
+    # 그래도 없음 → 구조는 건전하게 두되 순서는 주장하지 않는다
     return flatten(Node(XOR, children=[act(a) for a in sorted(acts)]))
+
+
+def _projected(acts: set[str], traces: list[list[str]] | None) -> list[list[str]]:
+    """이 활동들만 남긴 흐름(빈 흐름은 뺀다)."""
+    return [p for p in ([a for a in t if a in acts] for t in traces or []) if p]
+
+
+def _split(log: list[list[str]], cut_here) -> list[list[str]]:
+    out: list[list[str]] = []
+    for t in log:
+        cur = [t[0]]
+        for a, b in zip(t, t[1:]):
+            if cut_here(a, b):
+                out.append(cur)
+                cur = []
+            cur.append(b)
+        out.append(cur)
+    return out
+
+
+def _tau_loop(acts: set[str], traces: list[list[str]] | None, depth: int) -> Node | None:
+    """IM 의 fall-through 두 가지 (Leemans, Inductive Miner — infrequent 의 strict tau loop · tau loop).
+
+    컷이 없는 것은 대개 한 흐름 안에 본체가 되풀이돼서다("접수 → 작성 → 접수"). 이때 모든 단계를
+    배타 분기로 묶으면 '접수가 늘 먼저' 라는 순서가 사라진다. 대신:
+      - strict tau loop: 끝 단계 바로 뒤에 시작 단계가 오는 곳에서 흐름을 끊는다
+      - tau loop: (위로 안 끊기면) 시작 단계가 다시 나오는 곳마다 끊는다
+    끊은 조각들로 본체를 찾고, 본체를 되풀이할 수 있는 반복 loop(본체, τ) 으로 둔다.
+    """
+    log = _projected(acts, traces)
+    if not log:
+        return None
+    starts = {t[0] for t in log}
+    ends = {t[-1] for t in log}
+    for cut_here in (lambda a, b: a in ends and b in starts, lambda a, b: b in starts):
+        pieces = _split(log, cut_here)
+        if len(pieces) == len(log):
+            continue
+        from .dfg import build_dfg
+        body = discover(build_dfg(pieces), acts, pieces, depth + 1)
+        return Node(LOOP, children=[body, tau()])
+    return None
 
 
 def discover_from_traces(traces: list[list[str]], min_freq: int = 1, dependency_threshold: float = 0.0) -> Node:
